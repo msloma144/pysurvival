@@ -4,6 +4,7 @@ import torch.nn as nn
 import progressbar
 import time
 import copy
+from torch.nn.utils.clip_grad import clip_grad_norm_
 
 def initialization(init_method, W, is_tensor=True):
     """ Initializes the provided tensor. 
@@ -180,7 +181,11 @@ def optimize(loss_function, model, optimizer_str, lr=1e-4, nb_epochs=1000,
         def closure():
             optimizer.zero_grad()
             loss = loss_function(model, **kargs)
+            #print(f"loss raw: {loss}")
+            #loss = loss * 1/1000000
+            #print(f"loss: {loss}")
             loss.backward()
+            clip_grad_norm_(model.parameters(), 1)
             return loss
 
         if 'lbfgs' in optimizer_str.lower() :

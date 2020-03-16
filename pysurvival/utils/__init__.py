@@ -52,7 +52,10 @@ def check_data(*args):
             if isinstance(arg, np.ndarray) :
                 x = ( arg.astype(np.double),  )
             elif isinstance(arg, list):
-                x = ( np.asarray(arg).astype(np.double),  )
+                x = []
+                for val in arg:
+                    x.append( np.asarray(val).astype(np.double))
+                x = (x, )
             elif isinstance(arg, pd.Series):
                 x = ( arg.values.astype(np.double),  )
             elif isinstance(arg, pd.DataFrame):
@@ -65,7 +68,7 @@ def check_data(*args):
                 error += "'pd.DataFrame' ".format(arg=type(arg))
                 raise TypeError(error)
             
-            if np.sum( np.isnan(x) ) > 0. :
+            if not isinstance(arg, list) and np.sum( np.isnan(x) ) > 0. :
                 error = "The #{} argument contains null values"
                 error = error.format(i+1)
                 raise ValueError(error)

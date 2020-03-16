@@ -8,6 +8,7 @@ from pysurvival import utils
 from pysurvival.utils import neural_networks as nn
 from pysurvival.utils import optimization as opt
 from pysurvival.models import BaseModel
+import sys
 # %matplotlib inline
 
 class BaseMultiTaskModel(BaseModel):
@@ -86,7 +87,7 @@ class BaseMultiTaskModel(BaseModel):
         # Initializing the elements from BaseModel
         super(BaseMultiTaskModel, self).__init__(auto_scaler)
         
-        
+
     def get_times(self, T, is_min_time_zero = True, extra_pct_time = 0.1):
         """ Building the time axis (self.times) as well as the time intervals 
             ( all the [ t(k-1), t(k) ) in the time axis.
@@ -128,6 +129,12 @@ class BaseMultiTaskModel(BaseModel):
         Y_cens, Y_uncens = [], []
         X_cens, X_uncens = [], []
 
+        if isinstance(X, list):
+            for input_ in X:
+                X_cens.append([])
+                X_uncens.append([])
+
+
         # Building the output variable
         for i, (t, e) in enumerate( zip(T, E) ):
             y = np.zeros(self.num_times+1)
@@ -136,19 +143,45 @@ class BaseMultiTaskModel(BaseModel):
 
             if e == 1:
                 y[index] = 1.
-                X_uncens.append( X[i, :].tolist() )
+                if isinstance(X, list):
+                    for j, input_ in enumerate(X):
+                        X_uncens[j].append(input_[i, :].tolist())
+                else:
+                    X_uncens.append(X[i, :].tolist())
                 Y_uncens.append( y.tolist() )
 
             else:                
                 y[(index):] = 1.
-                X_cens.append( X[i, :].tolist() )
+
+                if isinstance(X, list):
+                    for j, input_ in enumerate(X):
+                        X_cens[j].append(input_[i, :].tolist())
+                else:
+                    X_cens.append( X[i, :].tolist() )
                 Y_cens.append( y.tolist() )
 
         # Transform into torch.Tensor
-        X_cens = torch.FloatTensor(X_cens)
-        X_uncens = torch.FloatTensor(X_uncens)
+        if isinstance(X, list):
+            for j, input_ in enumerate(X_cens):
+                X_cens[j] = torch.FloatTensor(input_)
+                if torch.cuda.is_available():
+                    X_cens[j] = X_cens[j].cuda()
+            for j, input_ in enumerate(X_uncens):
+                X_uncens[j] = torch.FloatTensor(input_)
+                if torch.cuda.is_available():
+                    X_uncens[j] = X_uncens[j].cuda()
+        else:
+            X_cens = torch.FloatTensor(X_cens)
+            X_uncens = torch.FloatTensor(X_uncens)
+            if torch.cuda.is_available():
+                X_cens = X_cens.cuda()
+                X_uncens = X_uncens.cuda()
+
         Y_cens = torch.FloatTensor(Y_cens)
         Y_uncens = torch.FloatTensor(Y_uncens)
+        if torch.cuda.is_available():
+            Y_cens = Y_cens.cuda()
+            Y_uncens = Y_uncens.cuda()
 
         return X_cens, X_uncens, Y_cens, Y_uncens 
         
@@ -161,11 +194,28 @@ class BaseMultiTaskModel(BaseModel):
 
         # Likelihood Calculations -- Uncensored
         score_uncens = model(X_uncens)
+        #print(f"score_uncens: {score_uncens}")
         phi_uncens = torch.exp( torch.mm(score_uncens, Triangle) )
+        #phi_uncens = torch.clamp(phi_uncens, min=1e-8, max=torch.finfo(torch.float32).max-1)
         reduc_phi_uncens = torch.sum(phi_uncens*Y_uncens, dim = 1)
+
+        #print(f"shape phi_uncens: {phi_uncens.shape}")
+        #print(f"shape Y_uncens: {Y_uncens.shape}")
+        #print(f"max phi_uncens: {phi_uncens.max()}")
+        #print(f"min phi_uncens: {phi_uncens.min()}")
+        #print(f"max Y_uncens: {Y_uncens.max()}")
+        #print(f"shape phi_uncens*Y_uncens: {(phi_uncens*Y_uncens).shape}")
+        #print(f"nans phi_uncens: {torch.isnan(phi_uncens).any()}")
+        #print(f"nans Y_uncens: {torch.isnan(Y_uncens).any()}")
+        #print(f"nans phi_uncens*Y_uncens: {torch.isnan(phi_uncens*Y_uncens).any()}")
+        #print(f"reduc_phi_uncens: {(reduc_phi_uncens)}")
+        #print(f"raw min Y_uncens: {(Y_uncens).min()}")
+        #print(f"Y_uncens: {(Y_uncens)}")
+        #print(f"raw min phi_uncens: {(phi_uncens).min()}")
 
         # Likelihood Calculations -- Censored
         score_cens = model(X_cens)
+        #print(f"score_cens: {score_cens}")
         phi_cens = torch.exp( torch.mm(score_cens, Triangle) )
         reduc_phi_cens = torch.sum( phi_cens*Y_cens, dim = 1)
 
@@ -176,15 +226,33 @@ class BaseMultiTaskModel(BaseModel):
         z_cens = torch.exp( torch.mm(score_cens, Triangle) )
         reduc_z_cens = torch.sum( z_cens, dim = 1)
 
+        reduc_phi_uncens = torch.clamp(reduc_phi_uncens, min=1e-8,  max=torch.finfo(torch.float32).max)
+        reduc_phi_cens = torch.clamp(reduc_phi_cens, min=1e-8, max=torch.finfo(torch.float32).max)
+        reduc_z_uncens = torch.clamp(reduc_z_uncens, min=1e-8, max=torch.finfo(torch.float32).max)
+        reduc_z_cens = torch.clamp(reduc_z_cens, min=1e-8, max=torch.finfo(torch.float32).max)
+
+        #print(f"zeros reduc_phi_uncens: {(0 >= torch.log(reduc_phi_uncens)).any()}")
+        #print(f"min reduc_phi_uncens: {(reduc_phi_uncens).min()}")
+        #print(f"reduc_phi_uncens: {torch.isnan(torch.log(reduc_phi_uncens)).any()}")
+        #print(f"reduc_phi_cens: {torch.isnan(torch.log(reduc_phi_cens)).any() }")
+        #print(f"reduc_z_uncens: {torch.isnan(torch.log(reduc_z_uncens)).any()}")
+        #print(f"reduc_z_cens: {torch.log(reduc_z_cens)}")
+#
+        #print(f"reduc_phi_uncens: {torch.log(reduc_phi_uncens).max()}")
+        #print(f"reduc_phi_cens: {torch.log(reduc_phi_cens).max()}")
+        #print(f"reduc_z_uncens: {torch.log(reduc_z_uncens).max()}")
+        #print(f"reduc_z_cens: {torch.log(reduc_z_cens).max()}")
+
         # MTLR cost function
         loss = - (
-                    torch.sum( torch.log(reduc_phi_uncens) ) \
-                  + torch.sum( torch.log(reduc_phi_cens) )  \
+                    torch.sum( torch.log(reduc_phi_uncens) )
+                    + torch.sum( torch.log(reduc_phi_cens) )
 
-                  - torch.sum( torch.log(reduc_z_uncens) ) \
-                  - torch.sum( torch.log(reduc_z_cens) ) 
+                    - torch.sum( torch.log(reduc_z_uncens) )
+                    - torch.sum( torch.log(reduc_z_cens) )
                  )
 
+        #print(f"loss_loss: {loss}")
         # Adding the regularized loss
         nb_set_parameters = len(list(model.parameters()))
         for i, w in enumerate(model.parameters()):
@@ -344,13 +412,24 @@ class BaseMultiTaskModel(BaseModel):
         # Checking data format (i.e.: transforming into numpy array)
         X, T, E = utils.check_data(X, T, E)
 
+        input_shape = []
         # Extracting data parameters
-        nb_units, self.num_vars = X.shape
-        input_shape = self.num_vars
-    
-        # Scaling data 
-        if self.auto_scaler:
-            X = self.scaler.fit_transform( X ) 
+        if isinstance(X, list):
+            nb_inputs = len(X)
+            for data in X:
+                nb_units, num_vars = data.shape
+                input_shape.append(num_vars)
+            # Scaling data
+            if self.auto_scaler:
+                for index, data in enumerate(X):
+                    X[index] = self.scaler.fit_transform(data)
+        else:
+            nb_inputs = 1
+            nb_units, self.num_vars = X.shape
+            input_shape.append(self.num_vars)
+            # Scaling data
+            if self.auto_scaler:
+                X = self.scaler.fit_transform(X)
 
         # Building the time axis, time buckets and output Y
         X_cens, X_uncens, Y_cens, Y_uncens \
@@ -362,8 +441,13 @@ class BaseMultiTaskModel(BaseModel):
                              bn_and_dropout )
 
         # Creating the Triangular matrix
-        Triangle = np.tri(self.num_times, self.num_times + 1, dtype=np.float32) 
+        Triangle = np.tri(self.num_times, self.num_times + 1, dtype=np.float32)
         Triangle = torch.FloatTensor(Triangle)
+
+        if torch.cuda.is_available():
+            model = model.cuda()
+            Triangle = Triangle.cuda()
+
 
         # Performing order 1 optimization
         model, loss_values = opt.optimize(self.loss_function, model, optimizer, 
@@ -404,15 +488,25 @@ class BaseMultiTaskModel(BaseModel):
                 x = self.scaler.transform( x )
         else:
             # Ensuring x has 2 dimensions
-            if x.ndim == 1:
-                x = np.reshape(x, (1, -1))
-
-        # Transforming into pytorch objects
-        x = torch.FloatTensor(x)
+            if isinstance(x, list):
+                for index in range(len(x)):
+                    if x[index].ndim == 1:
+                        x[index] = np.reshape(x[index], (1, -1))
+                    # Transforming into pytorch objects
+                    x[index] = torch.FloatTensor(x[index])
+                    if torch.cuda.is_available():
+                        x[index] = x[index].cuda()
+            else:
+                if x.ndim == 1:
+                    x = np.reshape(x, (1, -1))
+                # Transforming into pytorch objects
+                x = torch.FloatTensor(x)
+                if torch.cuda.is_available():
+                    x = x.cuda()
                 
         # Predicting using linear/nonlinear function
         score_torch = self.model(x)
-        score = score_torch.data.numpy()
+        score = score_torch.data.cpu().numpy()
                 
         # Cretaing the time triangles
         Triangle1 = np.tri(self.num_times , self.num_times + 1 )
@@ -563,6 +657,8 @@ class NeuralMultiTaskModel(BaseMultiTaskModel):
         # Checking the validity of structure
         structure = nn.check_mlp_structure(structure)
 
+        #print(structure)
+
         # Initializing the instance
         super(NeuralMultiTaskModel, self).__init__(
             structure = structure, bins = bins, auto_scaler = auto_scaler)
@@ -581,18 +677,36 @@ class NeuralMultiTaskModel(BaseMultiTaskModel):
             empty = len(self.name)
             self.name += '( '
             for i, s in enumerate(self.structure):
-                n = 'Layer({}): '.format(i+1)
-                activation = nn.activation_function(s['activation'], 
-                    return_text=True)
-                n += 'activation = {}, '.format( s['activation'] )
-                n += 'units = {} '.format( s['num_units'] )
-                
-                if i != S-1:
-                    self.name += n + '; \n'
-                    self.name += empty*' ' + '  '
+                if isinstance(s, list):
+                    for s_ in s:
+                        n = 'Layer({}): '.format(i+1)
+                        activation = nn.activation_function(s_['activation'],
+                            return_text=True)
+                        n += 'activation = {}, '.format( s_['activation'] )
+                        if 'num_units' in s_.keys():
+                            n += 'units = {} '.format( s_['num_units'] )
+
+                        if i != S-1:
+                            self.name += n + '; \n'
+                            self.name += empty*' ' + '  '
+                        else:
+                            self.name += n
+                    self.name = self.name + ')'
                 else:
-                    self.name += n
-            self.name = self.name + ')'
+                    n = 'Layer({}): '.format(i + 1)
+                    activation = nn.activation_function(s['activation'],
+                                                        return_text=True)
+                    n += 'activation = {}, '.format(s['activation'])
+                    if 'num_units' in s.keys():
+                        n += 'units = {} '.format(s['num_units'])
+
+                    if i != S - 1:
+                        self.name += n + '; \n'
+                        self.name += empty * ' ' + '  '
+                    else:
+                        self.name += n
+                self.name = self.name + ')'
+
             return self.name
 
 
