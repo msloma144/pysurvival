@@ -596,18 +596,41 @@ class NonLinearCoxPHModel(BaseModel):
         X, T, E = utils.check_data(X, T, E)
 
         # Extracting data parameters
-        N, self.num_vars = X.shape
-        input_shape = self.num_vars
-    
-        # Scaling data 
-        if self.auto_scaler:
-            X_original = self.scaler.fit_transform( X ) 
-            
+        
+        input_shape = []
+        # Extracting data parameters
+        if isinstance(X, list):
+            N, self.num_vars = X[0].shape
+            nb_inputs = len(X)
+            for data in X:
+                nb_units, num_vars = data.shape
+                input_shape.append(num_vars)
+            # Scaling data
+            if self.auto_scaler:
+                for index, data in enumerate(X):
+                    X[index] = self.scaler.fit_transform(data)
+        else:
+            N, self.num_vars = X.shape
+            nb_inputs = 1
+            nb_units, self.num_vars = X.shape
+            input_shape.append(self.num_vars)
+            # Scaling data
+            if self.auto_scaler:
+                X = self.scaler.fit_transform(X)
+
+        X_original = X   
+ 
         # Sorting X, T, E in descending order according to T
         order = np.argsort(-T)
         T = T[order]
         E = E[order]
-        X_original = X_original[order, :]
+
+        if isinstance(X_original, list):
+            for index, data in enumerate(X):
+                X_original[index] = X_original[index][order, :]
+        else:
+            X_original = X_original[order, :]
+
         self.times = np.unique(T[E.astype(bool)])
         self.nb_times = len(self.times)
         self.get_time_buckets()
@@ -618,7 +641,18 @@ class NonLinearCoxPHModel(BaseModel):
                              bn_and_dropout )
 
         # Looping through the data to calculate the loss
-        X = torch.FloatTensor(X_original) 
+        # Transform into torch.Tensor
+        if isinstance(X_original, list):
+            for j, input_ in enumerate(X_original):
+                X_original[j] = torch.FloatTensor(input_)
+                if torch.cuda.is_available():
+                    X_original[j] = X_original[j].cuda()
+        else:
+            X_original = torch.FloatTensor(X_original)
+            if torch.cuda.is_available():
+                X_original = X_original.cuda()
+
+        X = X_original
 
         # Computing the Risk and Fail tensors
         Risk, Fail = self.risk_fail_matrix(T, E)
@@ -631,6 +665,19 @@ class NonLinearCoxPHModel(BaseModel):
         Efron_one = torch.FloatTensor(Efron_one) 
         Efron_anti_one = torch.FloatTensor(Efron_anti_one) 
 
+        if torch.cuda.is_available():
+            model = model.cuda()
+            Risk = Risk.cuda() 
+            Fail = Fail.cuda() 
+
+            Efron_coef = Efron_coef.cuda() 
+            Efron_one = Efron_one.cuda() 
+            Efron_anti_one = Efron_anti_one.cuda() 
+            Efron_coef = Efron_coef.cuda() 
+            Efron_one = Efron_one.cuda() 
+            Efron_anti_one = Efron_anti_one.cuda() 
+
+
         # Performing order 1 optimization
         model, loss_values = opt.optimize(self.loss_function, model, optimizer, 
             lr, num_epochs, verbose, X=X, Risk=Risk, Fail=Fail, 
@@ -642,11 +689,11 @@ class NonLinearCoxPHModel(BaseModel):
         self.loss_values = loss_values
 
         # Computing baseline functions
-        x = X_original
-        x = torch.FloatTensor(x)
+        #x = X_original
+        #x = torch.FloatTensor(x)
 
         # Calculating risk_score
-        score = np.exp(self.model(torch.FloatTensor(x)).data.numpy().flatten())
+        score = np.exp(self.model(X).cpu().data.numpy().flatten())
         baselines = _baseline_functions(score, T, E)
 
         # Saving the Cython attributes in the Python object
@@ -708,23 +755,44 @@ class NonLinearCoxPHModel(BaseModel):
 
         # Convert x into the right format
         x = utils.check_data(x)
-        
-        # Scaling the data
-        if self.auto_scaler:
-            if x.ndim == 1:
-                x = self.scaler.transform( x.reshape(1, -1) )
-            elif x.ndim == 2:
-                x = self.scaler.transform( x )
+
+        if isinstance(x, list):
+            # Scaling data
+            if self.auto_scaler:
+                for index, X in enumerate(x):
+                    if X.ndim == 1:
+                        X = self.scaler.transform( X.reshape(1, -1) )
+                    elif X.ndim == 2:
+                        X = self.scaler.transform( X )
+                    x[index] = X
+            else:
+                for index, X in enumerate(x):
+                    # Ensuring x has 2 dimensions
+                    if X.ndim == 1:
+                        X = np.reshape(X, (1, -1))
+
+                    x[index] = X
         else:
-            # Ensuring x has 2 dimensions
-            if x.ndim == 1:
-                x = np.reshape(x, (1, -1))
+            # Scaling data
+            if self.auto_scaler:
+                x = self.scaler.fit_transform(x)
+
+        # Transform into torch.Tensor
+        if isinstance(x, list):
+            for j, input_ in enumerate(x):
+                x[j] = torch.FloatTensor(input_)
+                if torch.cuda.is_available():
+                    x[j] = x[j].cuda()
+        else:
+            x = torch.FloatTensor(x)
+            if torch.cuda.is_available():
+                x= x.cuda()
 
         # Transforming into pytorch objects
-        x = torch.FloatTensor(x)
+        #x = X_original
 
         # Calculating risk_score
-        score = self.model(x).data.numpy().flatten()
+        score = self.model(x).cpu().data.numpy().flatten()
         if not use_log:
             score = np.exp(score)
 
@@ -744,16 +812,33 @@ class NonLinearCoxPHModel(BaseModel):
             empty = len(self.name)
             self.name += '( '
             for i, s in enumerate(self.structure):
-                n = 'Layer({}): '.format(i+1)
-                activation = nn.activation_function(s['activation'], 
-                    return_text=True)
-                n += 'activation = {}, '.format( s['activation'] )
-                n += 'num_units = {} '.format( s['num_units'] )
-                
-                if i != S-1:
-                    self.name += n + '; \n'
-                    self.name += empty*' ' + '  '
+                if isinstance(s, list):
+                    for s_ in s:
+                        n = 'Layer({}): '.format(i+1)
+                        activation = nn.activation_function(s_['activation'],
+                            return_text=True)
+                        n += 'activation = {}, '.format( s_['activation'] )
+                        if 'num_units' in s_.keys():
+                            n += 'units = {} '.format( s_['num_units'] )
+
+                        if i != S-1:
+                            self.name += n + '; \n'
+                            self.name += empty*' ' + '  '
+                        else:
+                            self.name += n
+                    self.name = self.name + ')'
                 else:
-                    self.name += n
-            self.name += ')'
+                    n = 'Layer({}): '.format(i + 1)
+                    activation = nn.activation_function(s['activation'],
+                                                        return_text=True)
+                    n += 'activation = {}, '.format(s['activation'])
+                    if 'num_units' in s.keys():
+                        n += 'units = {} '.format(s['num_units'])
+
+                    if i != S - 1:
+                        self.name += n + '; \n'
+                        self.name += empty * ' ' + '  '
+                    else:
+                        self.name += n
+                self.name = self.name + ')'
             return self.name
