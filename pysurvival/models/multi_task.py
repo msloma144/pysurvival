@@ -183,6 +183,10 @@ class BaseMultiTaskModel(BaseModel):
             Y_cens = Y_cens.cuda()
             Y_uncens = Y_uncens.cuda()
 
+        print(type(X_cens))
+        print(type(X_uncens))
+        print(type(Y_cens))
+        print(type(Y_uncens))
         return X_cens, X_uncens, Y_cens, Y_uncens 
         
 
@@ -486,6 +490,9 @@ class BaseMultiTaskModel(BaseModel):
                 x = self.scaler.transform( x.reshape(1, -1) )
             elif x.ndim == 2:
                 x = self.scaler.transform( x )
+            x = torch.FloatTensor(x)
+            if torch.cuda.is_available():
+                x = x.cuda()
         else:
             # Ensuring x has 2 dimensions
             if isinstance(x, list):
@@ -503,7 +510,7 @@ class BaseMultiTaskModel(BaseModel):
                 x = torch.FloatTensor(x)
                 if torch.cuda.is_available():
                     x = x.cuda()
-                
+
         # Predicting using linear/nonlinear function
         score_torch = self.model(x)
         score = score_torch.data.cpu().numpy()

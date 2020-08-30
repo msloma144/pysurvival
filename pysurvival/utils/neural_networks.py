@@ -510,6 +510,8 @@ class NeuralNet(nn.Module):
                 input_size = hidden_size
 
         # Fully connected last layer
+        else:
+            input_size = input_size[0]
         fully_conn = nn.Linear(input_size, output_size)
         fully_conn.weight = opt.initialization(init_method, fully_conn.weight)
         fully_conn.bias = opt.initialization(init_method, fully_conn.bias)

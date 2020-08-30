@@ -61,7 +61,9 @@ def concordance_index(model, X, T, E, include_ties = True,
     """
 
     # Checking the format of the data 
+    print("risk score")
     risk = model.predict_risk(X, **kwargs)
+    print("check_data")
     risk, T, E = utils.check_data(risk, T, E)
 
     # Ordering risk, T and E in descending order according to T
@@ -71,6 +73,7 @@ def concordance_index(model, X, T, E, include_ties = True,
     E = E[order]
 
     # Calculating th c-index
+    print("c-index")
     results = _concordance_index(risk, T, E, include_ties)
 
     if not additional_results:
